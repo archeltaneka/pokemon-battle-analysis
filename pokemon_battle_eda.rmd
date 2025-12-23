@@ -1,0 +1,1382 @@
+---
+title: "Assignment 3"
+author: "Archel Taneka Sutanto"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+encoding: UTF-8
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: haddock
+  pdf_document:
+    df_print: kable
+    toc: true
+---
+
+# Assignment 3
+
+## 1. Setup
+
+Run the code chunks below to install the necessary packages before proceeding to the next steps.
+
+```{r install-packages, echo=TRUE, include=TRUE}
+required_packages <- c(
+  "tidyverse", "dplyr", "ggplot2", "fmsb", 
+  "xgboost", "caret", "SHAPforxgboost",
+  "stats", "factoextra"
+)
+
+for (package in required_packages) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+  }
+}
+```
+
+```{r load-packages}
+library(dplyr)
+library(stringi)
+library(tidyverse)
+library(rvest)
+library(jsonlite)
+library(readr)
+library(ggplot2)
+library(fmsb)
+library(xgboost)
+library(caret)
+library(SHAPforxgboost)
+library(stats)
+library(factoextra)
+```
+
+## 2. Dataset
+
+### 2.1. Battle Log & Pokedex
+
+We will be using the dataset from a Kaggle competition called **Pokemon - Weedle's Cave** . You can download the dataset using the link below:
+
+<https://www.kaggle.com/datasets/terminus7/pokemon-challenge?select=pokemon.csv>
+
+The dataset consists of three files:
+
+1.  **combats.csv** : Contains matchups between two Pokémon and a "Winner" label to indicate which Pokémon wins the battle.
+
+2.  **pokemon.csv** : A comprehensive Pokédex listing all Pokémon up to the 7th generation (X&Y). It includes details such as name, type, stats, generation, and legendary status.
+
+3.  **tests.csv** : A public test dataset. This file will not be used in this project.
+
+Additionally, we will need to download another dataset from Kaggle called **Complete Competitive Pokémon Dataset** :
+
+<https://www.kaggle.com/datasets/n2cholas/competitive-pokemon-dataset?select=move-data.csv>
+
+From this dataset, we only require the **move-data.csv** file, which provides detailed information about Pokémon moves. This will help enrich our data with more specific insights into move attributes and effects.
+
+```{r}
+pokemon_df <- read_csv("files/data/pokemon-challenge/pokemon.csv")
+head(pokemon_df)
+```
+
+### 2.2. Pokemon Moveset
+
+As highlighted in the report, this project stands out by incorporating Pokémon moves, which introduces a more complex problem due to the vast number of moves a Pokémon can potentially use. To address this, we will scrape the necessary data from the **Smogon website** : <https://www.smogon.com/dex/xy/pokemon/>.
+
+Each Pokémon is limited to four moveslots, and Smogon, being a community-driven platform, provides commonly used movesets for competitive play. This significantly simplifies our task, as it eliminates the need to source and compile moveset data manually, allowing us to focus on leveraging this information effectively.
+
+```{r}
+get_mega_stone <- function(pokemon_name) {
+    mega_stone = NULL
+    if(str_detect(pokemon_name, "Mega")) {
+        parts <- pokemon_name %>% strsplit(" ")
+        # Charizard and Mewtwo have 2 mega evolutions (X or Y)
+        if(length(parts[[1]]) == 3) {
+            pokemon <- parts[[1]][2]
+            if(pokemon == "Charizard") {
+                stone <- "Charizardite"
+            } else if(pokemon == "Mewtwo") {
+                stone <- "Mewtwonite"
+            }
+            x_or_y <- parts[[1]][3]
+            mega_stone <- paste0(stone, " ", x_or_y)
+        }
+    }
+    return(mega_stone)
+}
+
+handle_unique_pokemons <- function(pokemon_name) {
+    # Initial pokemon name preprocessing
+    pokemon_name <- str_to_lower(pokemon_name)
+    pokemon_name <- str_replace_all(pokemon_name, "[.']", "")
+    pokemon_name <- stri_trans_general(pokemon_name, "Latin-ASCII")
+    
+    # Handle pokemon with female/male symbols (e.g. Nidoran)
+    if(str_detect(pokemon_name, "♀")) {
+        pokemon_name <- str_replace_all(pokemon_name, "♀", "-f")
+    } else if(str_detect(pokemon_name, "♂")) {
+        pokemon_name <- str_replace_all(pokemon_name, "♂", "-m")
+    } else if(str_detect(pokemon_name, "female")) {
+        pokemon_name <- str_replace_all(pokemon_name, "female", "f")
+    } else if(str_detect(pokemon_name, "male")) {
+        pokemon_name <- str_replace_all(pokemon_name, "male", "m")
+    }
+    
+    # Handle pokemon with multiple forms
+    keywords_to_remove <- c("forme", "mode", "cloak", "normal",
+                            "primal", "average", "size")
+    if(any(str_detect(pokemon_name, keywords_to_remove))) {
+        pokemon_name <- str_replace_all(pokemon_name, paste(keywords_to_remove, collapse = "|"), "")
+    }
+    
+    # Handle pokemon with multiple variants
+    pokemon_name_split <- str_split(pokemon_name, " ")
+    variant <- pokemon_name_split[[1]][2]
+    if(variant %in% c("confined", "standard", "altered", "land", 
+                    "incarnate", "ordinary", "aria", "plant",
+                    "blade", "shield", "half")) {
+        pokemon_name <- str_replace_all(pokemon_name, variant, "")
+    }
+    
+    # Handle the word order specifically for "Rotom"
+    if(str_detect(pokemon_name, "rotom")) {
+        pokemon_name <- str_replace(pokemon_name, "^(\\w+)\\s+(\\w+)$", "\\2 \\1")
+    }
+    
+    # Final name preprocessing steps
+    pokemon_name <- str_trim(pokemon_name)
+    pokemon_name <- str_replace_all(pokemon_name, "mega | x| y", "")
+    
+    # Concat pokemon names longer than 2 words with '-' for scraping purposes
+    if(str_detect(pokemon_name, " ")) {
+        pokemon_name_split <- str_split(pokemon_name, " ")
+        pokemon_name <- paste0(pokemon_name_split[[1]][1], "-", pokemon_name_split[[1]][2])
+    }
+    
+    return(pokemon_name)
+}
+
+scrape_pokemon_moves <- function(pokemon_name, gen = "xy", debugging = FALSE) {
+    # Get item and scraping name from the original pokemon name
+    mega_stone <- get_mega_stone(pokemon_name)
+    scraping_name <- handle_unique_pokemons(pokemon_name)
+    
+    # Construct the URL and get the pokemon info based on scraping name
+    url <- paste0("https://www.smogon.com/dex/",
+                  gen,
+                  "/pokemon/",
+                  scraping_name,
+                  "/")
+    html <- tryCatch({
+                read_html(url)
+            }, error = function(e) {
+                return(NULL) # Return NULL if there's an error
+            })
+    scraping_successful <- !is.null(html)
+    
+    if (scraping_successful) {
+        # Extract the HTML tag that contains Pokémon moveset
+        json_data <- html %>%
+            html_element("script:contains('dex')") %>%
+            html_text() %>%
+            str_extract('"strategies":.+')
+
+        if (!is.null(json_data)) {
+            if (!is.null(mega_stone)) {
+                # Extract moves for specific Mega evolution
+                moveset <- json_data %>%
+                    str_extract(str_c('"items":\\["', mega_stone, '"\\].*?"moveslots":\\[\\[.*?\\]\\]')) %>%
+                    str_extract_all('"move":".*?"') %>%
+                    unlist() %>%
+                    str_replace_all('^"move":"|"$', "") %>%
+                    unique()
+            } else {
+                moveset <- json_data %>%
+                    str_extract_all('"move":".*?"') %>%
+                    unlist() %>%
+                    str_replace_all('^"move":"|"$', "") %>%
+                    unique()
+            }
+        } else {
+            moveset <- NULL
+        }
+    } else {
+        moveset <- NULL
+    }
+
+    if(!is.null(mega_stone)) {
+        moveset <- json_data %>%
+        str_extract(str_c('"items":\\["', mega_stone, '"\\].*?"moveslots":\\[\\[.*?\\]\\]')) %>% # Match the specific Mega evolution
+            str_extract_all('"move":".*?"') %>%
+            unlist() %>%
+            str_replace_all('^"move":"|"$', "") %>%
+            unique()
+    } else {
+        # Extract and clean the moveset
+        moveset <- json_data %>%
+            str_extract_all('"move":".*?"') %>%
+            unlist() %>%
+            str_replace_all('^"move":"|"$', "") %>%
+            unique() # 1 Pokemon might have the same move in different movesets
+    }
+
+    # Return the first 4 moves
+    return(list(
+        Original_Name = pokemon_name,
+        Standardised_Name = scraping_name,
+        Move1 = moveset[1],
+        Move2 = moveset[2],
+        Move3 = moveset[3],
+        Move4 = moveset[4],
+        Smogon_URL = url,
+        Scraping_Is_Successful = scraping_successful
+    ))
+}
+
+convert_pokemon_moves_to_df <- function(pokemon_df, n_pokemon_sample = NULL) {
+    if(is.null(n_pokemon_sample)) {
+        moves_list <- map(pokemon_df$Name, scrape_pokemon_moves)
+    } else {
+        moves_list <- map(head(pokemon_df$Name, n = n_pokemon_sample), 
+                          scrape_pokemon_moves)
+    }
+    moves_df <- moves_list %>%
+        map_dfr(~ tibble(
+            Original_Name = .x$Original_Name,
+            Standardised_Name = .x$Standardised_Name,
+            Move1 = .x$Move1,
+            Move2 = .x$Move2,
+            Move3 = .x$Move3,
+            Move4 = .x$Move4,
+            Smogon_URL = .x$Smogon_URL,
+            Scraping_Is_Successful = .x$Scraping_Is_Successful # Include the success indicator
+        )) %>%
+        mutate(
+            Is_Filled_Backwards = ifelse(is.na(Move1) & is.na(Move2) & is.na(Move3) & is.na(Move4), TRUE, FALSE)
+        ) %>%
+        fill(Move1, Move2, Move3, Move4, .direction = "down") # Fill any blank moves backwards
+    
+    return(moves_df)
+}
+
+get_effectiveness_type_chart <- function() {
+    return(data.frame(
+            Attacking = c("Normal", "Fire", "Water", "Electric", "Grass", "Ice", "Fighting", "Poison", "Ground", "Flying", "Psychic", "Bug", "Rock", "Ghost", "Dragon", "Dark", "Steel", "Fairy"),
+            Normal = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 0, 1, 1, 0.5, 1),
+            Fire = c(1, 0.5, 0.5, 1, 2, 2, 1, 1, 1, 1, 1, 2, 0.5, 1, 0.5, 1, 2, 1),
+            Water = c(1, 2, 0.5, 1, 0.5, 1, 1, 1, 2, 1, 1, 1, 2, 1, 0.5, 1, 1, 1),
+            Electric = c(1, 1, 2, 0.5, 0.5, 1, 1, 1, 0, 2, 1, 1, 1, 1, 0.5, 1, 1, 1),
+            Grass = c(1, 0.5, 2, 1, 0.5, 1, 1, 0.5, 2, 0.5, 1, 0.5, 2, 1, 0.5, 1, 0.5, 1),
+            Ice = c(1, 0.5, 0.5, 1, 2, 0.5, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 0.5, 1),
+            Fighting = c(2, 1, 1, 1, 1, 2, 1, 0.5, 1, 0.5, 0.5, 0.5, 2, 0, 1, 2, 2, 0.5),
+            Poison = c(1, 1, 1, 1, 2, 1, 1, 0.5, 0.5, 1, 1, 1, 0.5, 0.5, 1, 1, 0, 2),
+            Ground = c(1, 2, 1, 2, 0.5, 1, 1, 2, 1, 0, 1, 0.5, 2, 1, 1, 1, 2, 1),
+            Flying = c(1, 1, 1, 0.5, 2, 1, 2, 1, 1, 1, 1, 2, 0.5, 1, 1, 1, 0.5, 1),
+            Psychic = c(1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 0.5, 1, 1, 1, 1, 0, 0.5, 1),
+            Bug = c(1, 0.5, 1, 1, 2, 1, 0.5, 0.5, 1, 0.5, 2, 1, 1, 0.5, 1, 2, 0.5, 0.5),
+            Rock = c(1, 2, 1, 1, 1, 2, 0.5, 1, 0.5, 2, 1, 2, 1, 1, 1, 1, 0.5, 1),
+            Ghost = c(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 0.5, 1, 1),
+            Dragon = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 0.5, 0),
+            Dark = c(1, 1, 1, 1, 1, 1, 0.5, 1, 1, 1, 2, 1, 1, 2, 1, 0.5, 1, 0.5),
+            Steel = c(1, 0.5, 0.5, 0.5, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 0.5, 2),
+            Fairy = c(1, 0.5, 1, 1, 1, 1, 2, 0.5, 1, 1, 1, 1, 1, 1, 2, 2, 0.5, 1)
+    ))
+}
+```
+
+Let's try using 10 Pokemon samples.
+
+```{r}
+moves_df <- convert_pokemon_moves_to_df(pokemon_df, n_pokemon_sample = 10)
+head(moves_df)
+```
+
+Now let it run for the entire Pokemon list.
+
+```{r}
+start_time <- Sys.time()
+
+moves_df <- convert_pokemon_moves_to_df(pokemon_df)
+saveRDS(moves_df, file = "files/data/pokemon-challenge/pokemon_moveset.rds")
+
+end_time <- Sys.time()
+execution_time <- end_time - start_time
+cat("Scraping time:", round(as.numeric(execution_time, units = "secs"), 2), "seconds\n")
+```
+
+## 3. Preprocess
+
+We now have four key datasets:
+
+1.  **Pokémon Compendium Dataset** : Contains detailed information about each Pokémon, including their name, type, stats, generation, and legendary status.
+
+2.  **Pokémon Moveset Data (Scraped from Smogon)** : Provides commonly used movesets for each Pokémon, sourced from the Smogon community.
+
+3.  **Pokémon Move Details Dataset** : Includes specific details about each move, such as its type, power, accuracy, and effects.
+
+4.  **Pokémon Battle Logs** : Contains records of matchups between two Pokémon and the outcome of each battle.
+
+In addition to these, there is another critical dataset called the **Effectiveness Table** . This table outlines the type advantages and disadvantages for each Pokémon type. The values in the table represent damage multipliers that determine how effective a move is against a target based on their types. For example, Water-type moves deal **2x damage** to Fire-type Pokémon, while they deal only **0.5x damage** to Grass-type Pokémon. This dataset is essential for understanding and calculating the impact of type matchups in battles.
+
+```{r}
+pokemon_df <- read_csv("files/data/pokemon-challenge/pokemon.csv")
+pokemon_moveset_df <- readRDS("files/data/pokemon-challenge/pokemon_moveset.rds")
+move_data_df <- read_csv("files/data/competitive-pokemon-dataset/move-data.csv")
+pokemon_combat_df <- read_csv("files/data/pokemon-challenge/combats.csv")
+effectiveness_df <- get_effectiveness_type_chart()
+```
+
+### 3.1. Join & Assemble the Dataset
+
+Next, we need to integrate all five data sources into a single unified table by performing the following steps:
+
+1.  **Join `pokemon_combat_df` (Battle Logs) with `pokemon_df` (Pokémon Compendium):**\
+    Merge these datasets to retrieve detailed information about the two Pokémon involved in each battle, such as their names, types, stats, and other attributes.
+
+2.  **Join with `pokemon_moveset_df` (Pokémon Moveset):**\
+    Add four additional columns to each Pokémon's data, representing the moves assigned to them based on the Smogon movesets.
+
+3.  **Join with `move_data_df` (Move Details):**\
+    Incorporate details for each move, including its type, power, accuracy, PP (Power Points), and other relevant attributes.
+
+4.  **Calculate Effectiveness for Each Move and Pokémon Type:**\
+    Use the **Effectiveness Table** to compute the damage multiplier for each move against the opposing Pokémon's type(s). This step ensures that type advantages and disadvantages are accurately reflected in the analysis.
+
+5.  **Handle Missing Values:**
+
+    -   Fill null values in the effectiveness columns with **0** , as this indicates no effect (neutral or invalid matchups).
+
+    -   Replace null values in string columns with **empty strings** to ensure consistency and avoid errors during analysis.
+
+By completing these steps, we will have a comprehensive dataset that combines battle logs, Pokémon attributes, moveset details, and type effectiveness, ready for further analysis or modeling.
+
+```{r}
+calculate_effectiveness <- function(move_type, opponent_type_1, opponent_type_2, effectiveness_df) {
+    if(is.na(move_type)) {
+        return(NA)
+    }
+    
+    if(!is.na(opponent_type_1)) {
+        type1_multiplier <- effectiveness_df %>%
+                filter(Attacking == opponent_type_1) %>%
+                pull(as.character(move_type)) %>%
+                as.numeric()
+    } else {
+        type1_multiplier <- 1
+    }
+    
+    if(!is.na(opponent_type_2)) {
+        type2_multiplier <- effectiveness_df %>%
+                filter(Attacking == opponent_type_2) %>%
+                pull(as.character(move_type)) %>%
+                as.numeric()
+    } else {
+        type2_multiplier <- 1
+    }
+    
+    return(type1_multiplier * type2_multiplier)
+}
+
+preprocess_pokemon_data <- function(pokemon_df, pokemon_moveset_df, move_data_df, pokemon_combat_df, effectiveness_df) {
+    
+    # Preprocess pokedex data
+    colnames(pokemon_df) <- c("No", "Name", "Type1", "Type2",
+                              "HP", "Attack", "Defense", "Sp_Atk",
+                              "Sp_Def", "Speed", "Generation", "Is_Legendary")
+    
+    # Preprocess move data
+    move_data_df <- move_data_df %>%
+        mutate(Power = ifelse(is.na(Power), 0, Power),
+               Accuracy = ifelse(is.na(Accuracy), 100, Accuracy)) %>%
+        select(-Index, -Contest, -Generation)
+
+    pokemon_moveset_df <- pokemon_moveset_df %>%
+        filter(!Is_Filled_Backwards) %>%
+        select(Original_Name, Move1, Move2, Move3, Move4) %>%
+        left_join(move_data_df, by = join_by(Move1 == Name)) %>%
+        rename(
+            Move1_Type = Type,
+            Move1_Power = Power,
+            Move1_Accuracy = Accuracy
+        ) %>%
+        left_join(move_data_df, by = join_by(Move2 == Name), suffix = c("_Move1", "_Move2")) %>%
+        rename(
+            Move2_Type = Type,
+            Move2_Power = Power,
+            Move2_Accuracy = Accuracy
+        ) %>%
+        left_join(move_data_df, by = join_by(Move3 == Name)) %>%
+        rename(
+            Move3_Type = Type,
+            Move3_Power = Power,
+            Move3_Accuracy = Accuracy
+        ) %>%
+        left_join(move_data_df, by = join_by(Move4 == Name), suffix = c("_Move3", "_Move4")) %>%
+        rename(
+            Move4_Type = Type,
+            Move4_Power = Power,
+            Move4_Accuracy = Accuracy
+        )
+    
+    # Preprocess pokemon combat
+    pokemon_combat_df <- pokemon_combat_df %>%
+        # Join with pokedex table to find pokemon info details (stats)
+        left_join(pokemon_df, by = join_by(First_pokemon == No)) %>%
+        rename_with(~ paste0("First_", .), .cols = c("Name", "Type1", "Type2", "HP", "Attack", "Defense", "Sp_Atk", "Sp_Def", "Speed", "Generation", "Is_Legendary")) %>%
+        left_join(pokemon_df, by = join_by(Second_pokemon == No)) %>%
+        rename_with(~ paste0("Second_", .), .cols = c("Name", "Type1", "Type2", "HP", "Attack", "Defense", "Sp_Atk", "Sp_Def", "Speed", "Generation", "Is_Legendary")) %>%
+        
+        # Join with moveset table
+        left_join(pokemon_moveset_df, by = join_by(First_Name == Original_Name)) %>%
+        rename_with(~ paste0("First_", .), .cols = c(starts_with("Move"), starts_with("Category"), starts_with("PP"))) %>%
+        left_join(pokemon_moveset_df, by = join_by(Second_Name == Original_Name)) %>%
+        rename_with(~ paste0("Second_", .), .cols = c(starts_with("Move"), starts_with("Category"), starts_with("PP"))) %>%
+        
+        # Add type effectiveness calculation
+        mutate(
+            First_Type1_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Type1,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            First_Type2_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Type2,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Type1_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Type1,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Type2_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Type2,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            
+            First_Move1_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move1_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            First_Move2_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move2_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            First_Move3_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move3_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            First_Move4_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move4_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Move1_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Move1_Type,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Move2_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Move2_Type,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Move3_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Move3_Type,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+            Second_Move4_Effectiveness = mapply(calculate_effectiveness,
+                                         Second_Move4_Type,
+                                         First_Type1,
+                                         First_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+    ) %>%
+    
+    # Fill the remaining columns with 0 for numeric and empty string "" for characters
+    mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>% 
+    mutate(across(where(is.character), ~ replace_na(.x, "")))
+    
+    return(pokemon_combat_df)
+}
+```
+
+```{r}
+start_time <- Sys.time()
+
+final_df <- preprocess_pokemon_data(pokemon_df, pokemon_moveset_df, move_data_df, pokemon_combat_df, effectiveness_df)
+saveRDS(final_df, file = "files/data/final_pokemon_data.rds")
+
+end_time <- Sys.time()
+execution_time <- end_time - start_time
+cat("Execution time:", round(as.numeric(execution_time, units = "secs"), 2), "seconds\n")
+```
+
+## 4. Exploratory Data Analysis (EDA)
+
+Once we have a comprehensive dataset, let’s analyze it to address the problem of determining whether to switch Pokémon. To guide this analysis, I have defined the following three research questions:
+
+1.  **What are the most important factors in determining which Pokémon will win (and whether a switch is necessary)?**\
+    This question aims to identify key predictors of victory, such as stats (e.g., speed, attack), type advantages, or other attributes, to help decide whether staying in the battle or switching Pokémon is the better strategy.
+
+2.  **In some cases, a Pokémon might win despite having type disadvantages. What are the deciding factors that contribute to their success?**\
+    This question explores scenarios where Pokémon overcome inherent type weaknesses, focusing on factors like move combinations, stat distributions, or strategic gameplay decisions that lead to unexpected victories.
+
+3.  **Is there an optimal combination of move types (e.g., two Physical moves and two Special moves) that leads to higher win rates?**\
+    This question investigates whether specific configurations of move types—such as balancing Physical and Special moves, or prioritizing certain move categories—can enhance a Pokémon's chances of winning.
+
+By addressing these research questions, we can gain deeper insights into the dynamics of Pokémon battles and develop data-driven strategies for making effective in-battle decisions, such as when to switch Pokémon or how to optimise move sets.
+
+```{r}
+type_color_mapping <- c(
+    "Dragon" = "#6F35FC", "Steel" = "#B7B7CE", "Flying" = "#A98FF3",
+    "Fairy" = "#F95587", "Rock" = "#B6A136", "Fire" = "#EE8130",
+    "Electric" = "#F7D02C", "Dark" = "#705746", "Ghost" = "#735797",
+    "Ground" = "#E2BF65", "Ice" = "#96D9D6", "Water" = "#6390F0",
+    "Grass" = "#7AC74C", "Fighting" = "#C22E28", "Psychic" = "#D685AD",
+    "Poison" = "#A33EA1", "Normal" = "#A8A77A", "Bug" = "#A6B91A"
+)
+
+outcome_colors <- c("Winner" = "#80ed99", "Loser" = "#f28482")
+
+legendary_colors <- c("Non-Legendary" = "#69b3a2", "Legendary" = "#404080")
+```
+
+```{r}
+df <- readRDS("files/data/final_pokemon_data.rds")
+dim(df)
+```
+
+### 4.1. Pokemon Stats
+
+Perhaps the most fundamental aspect to examine is the basic statistics of Pokémon. These stats play a critical role in determining battle outcomes and are defined as follows:
+
+-   **HP (Hit Points):** Represents the "health" of a Pokémon. When a Pokémon's HP reaches 0, it faints, and another Pokémon must be sent out to replace it.
+
+-   **Attack:** Also known as "physical attack," this stat determines the damage dealt by physical moves.
+
+-   **Defense:** Reduces the damage taken from physical attacks, based on the opponent's Attack stat.
+
+-   **Special Attack:** Different from physical attack, this stat governs the power of special (or "magic-like") moves.
+
+-   **Special Defense:** Reduces the damage taken from special attacks, based on the opponent's Special Attack stat.
+
+-   **Speed:** Determines which Pokémon moves first in a battle, with faster Pokémon typically acting ahead of slower ones.
+
+To begin our analysis, let’s first examine the **stat aggregation for each Pokémon type** . This will help us understand how different types of Pokémon compare in terms of their average stats (e.g., whether Fire-type Pokémon generally have higher Attack, or if Water-type Pokémon tend to excel in Special Defense). By aggregating these stats, we can identify trends and patterns that may influence battle strategies and decisions.
+
+```{r fig.width=10, fig.height=6}
+par(mfrow=c(3,6))
+par(mar=c(1,1,1,1))
+
+df <- df %>%
+    mutate(
+        First_Outcome = ifelse(First_pokemon == Winner, "Winner", "Loser"),
+        Second_Outcome = ifelse(Second_pokemon == Winner, "Winner", "Loser")
+    )
+
+show_type_radar_chart <- function(type_data, type_name, type_mapping_color) {
+    # Add min and max values for scaling the radar chart
+    radar_data <- rbind(
+        rep(ceiling(max(type_data$Value)), nrow(type_data)), # Max value for scaling
+        rep(floor(min(type_data$Value)), nrow(type_data)), # Min value for scaling
+        type_data$Value # Actual values
+    )
+    radar_data <- as.data.frame(radar_data)
+
+    # Add column names
+    colnames(radar_data) <- c("HP", "Attack", "Defense", "Sp_Atk", "Sp_Def", "Speed")
+
+    # Plot the radar chart
+    radarchart(
+        radar_data,
+        axistype = 0,
+        pcol = type_mapping_color,
+        pfcol = adjustcolor(type_mapping_color, alpha.f = 0.5),
+        plwd = 2,
+        cglcol="grey", 
+        cglty=1, 
+        axislabcol="black",
+        title = type_name,
+        caxislabels=seq(0,2000,5), 
+        cglwd=0.8
+    )
+}
+
+winner_stats_df <- bind_rows(
+    df %>%
+        select(First_Type1, First_HP, First_Attack, First_Defense, First_Sp_Atk, First_Sp_Def, First_Speed, Outcome = First_Outcome) %>%
+        rename(First_Type = First_Type1) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    df %>%
+        select(First_Type2, First_HP, First_Attack, First_Defense, First_Sp_Atk, First_Sp_Def, First_Speed, Outcome = First_Outcome) %>%
+        rename(First_Type = First_Type2) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    df %>%
+        select(Second_Type1, Second_HP, Second_Attack, Second_Defense, Second_Sp_Atk, Second_Sp_Def, Second_Speed, Outcome = Second_Outcome) %>%
+        rename(Second_Type = Second_Type1) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything()),
+    df %>%
+        select(Second_Type2, Second_HP, Second_Attack, Second_Defense, Second_Sp_Atk, Second_Sp_Def, Second_Speed, Outcome = Second_Outcome) %>%
+        rename(Second_Type = Second_Type2) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything())
+) %>%
+    filter(Type != "") %>%
+    group_by(Type) %>%
+    summarize(
+        HP = mean(HP, na.rm = TRUE),
+        Attack = mean(Attack, na.rm = TRUE),
+        Defense = mean(Defense, na.rm = TRUE),
+        Sp_Atk = mean(Sp_Atk, na.rm = TRUE),
+        Sp_Def = mean(Sp_Def, na.rm = TRUE),
+        Speed = mean(Speed, na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    pivot_longer(cols = c(HP, Attack, Defense, Sp_Atk, Sp_Def, Speed),
+                 names_to = "Stat", values_to = "Value") %>%
+    mutate(Color = type_color_mapping[as.character(Type)])
+
+for (type in unique(winner_stats_df$Type)) {
+    type_data <- winner_stats_df %>% filter(Type == type)
+    type_color <- unique(type_data$Color)
+    
+    show_type_radar_chart(type_data, type, type_color)
+}
+```
+
+From the battle logs, we can observe that different Pokémon types exhibit distinct stat distributions, which influence their roles in battles:
+
+-   **Physical Attackers:** These types tend to have higher ***Attack***stats and rely on physical moves to deal damage.
+
+    -   Examples: **Bug, Dark, Dragon, Fighting, Grass, Ground, Poison, Water**
+
+-   **Special Attackers:** These types excel in ***Special Attack***, using special (or "magic-like") moves to overpower opponents.
+
+    -   Examples: **Electric, Fairy, Fire, Ghost, Grass, Ice, Poison, Psychic, Water**
+
+-   **Physically Defensive:** These types are strong in ***Defense***, allowing them to withstand physical attacks more effectively.
+
+    -   Examples: **Bug, Ghost, Grass, Ground, Rock, Steel, Water**
+
+-   **Specially Defensive:** These types have high ***Special Defense***, enabling them to resist special attacks.
+
+    -   Examples: **Fairy, Ghost, Grass, Ice, Poison**
+
+-   **Speedy:** These types are characterised by high ***Speed***, giving them an advantage in moving first during battles.
+
+    -   Examples: **Electric, Flying, Normal**
+
+-   **Bulky (High in HP):** These types have higher ***HP***, making them more durable and capable of enduring prolonged battles.
+
+    -   Examples: **Ice, Normal, Water**
+
+This breakdown highlights the natural tendencies of each type, providing valuable insights into their strengths and potential roles in battle strategies. For instance, a **Water-type** Pokémon might serve as both a physical and special attacker while also being physically defensive and bulky, making it a versatile choice. On the other hand, a **Ghost-type** Pokémon might focus on defense and special attack, excelling in specific scenarios. Understanding these distributions can help inform decisions about team composition and move selection.
+
+How about the stats difference between "Winner" and "Loser"?
+
+```{r}
+winner_stats_df <- bind_rows(
+    df %>%
+        select(First_Name, First_HP, First_Attack, First_Defense, First_Sp_Atk, First_Sp_Def, First_Speed, First_Is_Legendary, Outcome = First_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    df %>%
+        select(Second_Name, Second_HP, Second_Attack, Second_Defense, Second_Sp_Atk, Second_Sp_Def, Second_Speed, Second_Is_Legendary, Outcome = Second_Outcome) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything())
+)
+
+winner_stats_long_df <- winner_stats_df %>%
+    pivot_longer(cols = c(HP, Attack, Defense, Sp_Atk, Sp_Def, Speed),
+                 names_to = "Stat", values_to = "Value")
+
+ggplot(winner_stats_long_df, aes(x = Stat, y = Value, fill = Outcome)) +
+    geom_boxplot() +
+    labs(title = "Pokemon Combat Stats Difference",
+         x = "Stat", y = "Value") +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors)
+```
+
+Almost every Pokémon that won in the dataset has noticeably higher stats compared to their opponents, particularly in **Speed, Attack,** and **Special Attack.** This finding is intuitive, as these stats play a critical role in determining battle outcomes.
+
+-   **Speed** is especially crucial because the Pokémon with the higher Speed stat typically moves first, allowing it to deal damage or apply status effects before the opponent can act.
+
+-   **Attack** and **Special Attack** are key indicators of offensive power, enabling Pokémon to deal significant damage using physical or special moves, respectively.
+
+This trend underscores the importance of prioritizing these stats when selecting or training Pokémon for battles. A faster Pokémon can seize the initiative, while a strong attacker can overwhelm opponents before they have a chance to respond. These insights align with common competitive strategies, where Speed and offensive capabilities often dictate the flow of a match.
+
+Now, let’s explore other factors beyond stats, such as **legendary status.**
+
+```{r}
+legendary_non_legendary_df <- df %>%
+    filter((First_Is_Legendary == TRUE & Second_Is_Legendary == FALSE) |
+           (Second_Is_Legendary == TRUE & First_Is_Legendary == FALSE))
+
+winner_stats_df <- bind_rows(
+    legendary_non_legendary_df %>%
+        select(First_Name, First_HP, First_Attack, First_Defense, First_Sp_Atk, First_Sp_Def, First_Speed, First_Is_Legendary, Outcome = First_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    legendary_non_legendary_df %>%
+        select(Second_Name, Second_HP, Second_Attack, Second_Defense, Second_Sp_Atk, Second_Sp_Def, Second_Speed, Second_Is_Legendary, Outcome = Second_Outcome) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything())
+)
+
+legendary_outcome_summary <- winner_stats_df %>%
+    group_by(Is_Legendary, Outcome) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    mutate(Is_Legendary = factor(Is_Legendary, levels = c(FALSE, TRUE), labels = c("Non-Legendary", "Legendary")))
+
+ggplot(legendary_outcome_summary, aes(x = Is_Legendary, y = Count, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+    labs(title = "Win/Loss Distribution for Legendary Vs. Non-Legendary Matchups",
+         x = "Legendary Status", y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors) +
+    theme(
+        axis.text.x = element_text(size = 10),
+        legend.position = "top"
+    )
+```
+
+Legendary Pokemons have a higher win count compared to the regular Pokemons.
+
+```{r}
+winner_stats_long_df <- winner_stats_df %>%
+    pivot_longer(cols = c(HP, Attack, Defense, Sp_Atk, Sp_Def, Speed),
+                 names_to = "Stat", values_to = "Value") %>%
+    mutate(Is_Legendary = factor(Is_Legendary, levels = c(FALSE, TRUE), labels = c("Non-Legendary", "Legendary")))
+
+ggplot(winner_stats_long_df, aes(x = Stat, y = Value, fill = Is_Legendary)) +
+    geom_boxplot() +
+    labs(title = "Pokemon Combat Stats Difference",
+         x = "Stat", y = "Value") +
+    theme_minimal() +
+    scale_fill_manual(values = legendary_colors)
+```
+
+Indeed, legendary Pokémon generally possess higher base stats compared to non-legendary ones. However, the earlier chart showing the win/loss distribution reveals that legendary Pokémon still lost approximately **1,500 battles** . This raises the question: what could explain these losses despite their superior stats?
+
+To investigate further, let’s revisit the **stat differences** and consider other potential factors that might influence battle outcomes.
+
+```{r}
+legendary_loses <- winner_stats_df %>%
+    filter(Is_Legendary == TRUE & Outcome == "Loser")
+
+non_legendary_loses <- winner_stats_df %>%
+    filter(Is_Legendary == FALSE & Outcome == "Winner")
+
+# Combine the two subsets
+loser_stats_df <- bind_rows(
+    legendary_loses %>% mutate(Group = "Legendary Losers"),
+    non_legendary_loses %>% mutate(Group = "Non-Legendary Winners")
+)
+
+# Reshape the data into long format
+long_stats_df <- loser_stats_df %>%
+    pivot_longer(cols = c(HP, Attack, Defense, Sp_Atk, Sp_Def, Speed),
+                 names_to = "Stat", values_to = "Value")
+
+group_colors <- c("Legendary Losers" = "#f28482", "Non-Legendary Winners" = "#80ed99")
+ggplot(long_stats_df, aes(x = Stat, y = Value, fill = Group)) +
+    geom_boxplot(alpha = 0.7, position = position_dodge(width = 0.8)) + # Add dodge for side-by-side boxplots
+    labs(title = "Stat Comparison in Legendary vs. Non-Legendary Matchups",
+         x = "Stat", y = "Stat Value") +
+    theme_minimal() +
+    scale_fill_manual(values = group_colors) +
+    theme(
+        axis.text.x = element_text(size = 10), # Rotate x-axis labels for readability
+        legend.position = "top"
+    )
+```
+
+Legendary Pokémon are superior in all aspects except for Speed . This observation strongly suggests that ***Speed*** plays a crucial role in determining which Pokémon will win a battle.
+
+### 4.2. Type Effectiveness
+
+Type matchups are a critical aspect of Pokémon battles, as moves that are "super effective" deal significantly more damage. This means that even if a Pokémon has a type disadvantage, it can still turn the tide of battle by utilizing moves that exploit its opponent's weaknesses or cover its own vulnerabilities.
+
+To begin our analysis, let’s first examine the **distribution of Pokémon types** in our battle log dataset.
+
+```{r}
+type_outcomes <- bind_rows(
+    df %>%
+        select(First_Type1, Outcome = First_Outcome) %>%
+        rename(Type = First_Type1),
+    df %>%
+        select(First_Type2, Outcome = First_Outcome) %>%
+        rename(Type = First_Type2),
+    df %>%
+        select(Second_Type1, Outcome = Second_Outcome) %>%
+        rename(Type = Second_Type1),
+    df %>%
+        select(Second_Type2, Outcome = Second_Outcome) %>%
+        rename(Type = Second_Type2)
+) %>%
+    filter(Type != "") %>%
+    group_by(Type, Outcome) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    group_by(Type) %>%
+    mutate(Total = sum(Count),
+           Proportion = Count / Total) %>%
+    ungroup() %>%
+    mutate(Type = fct_reorder(Type, Total))
+
+type_counts <- type_outcomes %>%
+    select(Type, Total) %>%
+    unique()
+
+ggplot(type_counts, aes(x = Type, y = Total, fill = Type)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "Pokémon Type Counts",
+         x = "Type", y = "Count") +
+    coord_flip() +
+    theme_minimal() +
+    scale_fill_manual(values = type_color_mapping) +
+    theme(legend.position = "None")
+```
+
+It appears that Water-type Pokémon are the most frequently used type in the battle log dataset. Next, let’s analyze the win-loss proportions for each Pokémon type to gain further insights into their performance.
+
+```{r}
+ggplot(type_outcomes, aes(x = Type, y = Count, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.6) +
+    labs(title = "Win/Loss Counts by Pokémon Type",
+         x = "Type", y = "Count") +
+    coord_flip() +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors)
+```
+
+```{r}
+ggplot(type_outcomes, aes(x = Type, y = Proportion, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "stack") +
+    labs(title = "Proportion of Wins/Losses by Pokémon Type",
+         x = "Type", y = "Proportion") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_fill_manual(values = outcome_colors)
+```
+
+**Flying**, **Normal**, **Psychic**, **Fire**, **Fighting**, **Dark**, **Dragon**, and **Electric** have higher win rates in comparison to other types.
+
+Let's look closer at the effectiveness table.
+
+```{r}
+type_matchup_matrix <- get_effectiveness_type_chart()
+type_matchup_matrix <- type_matchup_matrix %>%
+    pivot_longer(cols = -Attacking, names_to = "Defending", values_to = "Effectiveness") %>%
+    rename(Attacking_Type = Attacking, Defending_Type = Defending)
+
+effectiveness_colors <- c("#f28482", "#ffffff", "#80ed99") # Red (low) -> White (neutral) -> Green (high)
+ggplot(type_matchup_matrix, aes(x = Defending_Type, y = Attacking_Type, fill = Effectiveness)) +
+    geom_tile(color = "white", size = 0.1) +
+    geom_text(aes(label = Effectiveness), color = "black", size = 2.5) + # Add effectiveness values as text
+    scale_fill_gradientn(colors = effectiveness_colors, limits = c(0, 2), name = "Effectiveness") +
+    labs(title = "Pokémon Type Effectiveness Heatmap",
+         x = "Attacking Type", y = "Defending Type") +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8)
+    )
+```
+
+For each attacking move that targets an opponent's weakness, the damage is multiplied by **2x** . For example, if a Pokémon uses a Fire-type move against a dual-type Bug and Steel Pokémon, it will deal **4x damage** because both types are weak to Fire. Conversely, this multiplier system also applies to resistances, where the damage is reduced to **0.5x** (or **0.25x** for double resistances) instead of 2x.
+
+With this in mind, we can now analyze the **win rates** for moves with effectiveness levels of **0.25x** , **0.5x** , **2x** , and **4x** to better understand their impact on battle outcomes.
+
+```{r}
+df <- df %>%
+    rowwise() %>%
+    mutate(
+        First_Most_Effectiveness_Type = max(First_Type1_Effectiveness, First_Type2_Effectiveness, na.rm = TRUE),
+        Second_Most_Effectiveness_Type = max(Second_Type1_Effectiveness, Second_Type2_Effectiveness, na.rm = TRUE)
+    ) %>%
+    ungroup()
+
+type_effectiveness_df <- bind_rows(
+    df %>%
+        select(First_Name, First_Most_Effectiveness_Type, Outcome = First_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    df %>%
+        select(Second_Name, Second_Most_Effectiveness_Type, Outcome = Second_Outcome) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything())
+)
+
+type_summary <- type_effectiveness_df %>%
+    group_by(Outcome, Most_Effectiveness_Type = cut(Most_Effectiveness_Type, breaks = c(0, 0.5, 1, 2, 4))) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    ungroup() %>%
+    filter(!is.na(Most_Effectiveness_Type))
+
+ggplot(type_summary, aes(x = Most_Effectiveness_Type, y = Count, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7, alpha = 0.8) +
+    labs(title = "Outcome Distribution by Pokemon Type Effectiveness",
+         x = "Effectiveness", y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors)+
+    scale_x_discrete(labels =  c(
+        "(0,0.25]" = "0.25x",
+        "(0,0.5]" = "0.5x",
+        "(0.5,1]" = "1x",
+        "(1,2]" = "2x",
+        "(2,4]" = "4x"
+    )
+)
+```
+
+We can see that Pokemon types that do 2x and 4x effectiveness have higher win count.
+
+```{r}
+df <- df %>%
+    rowwise() %>%
+    mutate(
+        First_Most_Effective_Move = max(First_Move1_Effectiveness, First_Move2_Effectiveness, First_Move3_Effectiveness, First_Move4_Effectiveness, na.rm = TRUE),
+        Second_Most_Effective_Move = max(Second_Move1_Effectiveness, Second_Move2_Effectiveness, Second_Move3_Effectiveness, Second_Move4_Effectiveness, na.rm = TRUE)
+    ) %>%
+    ungroup()
+
+move_effectiveness_df <- bind_rows(
+    df %>%
+        select(First_Name, First_Most_Effective_Move, Outcome = First_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    df %>%
+        select(Second_Name, Second_Most_Effective_Move, Outcome = Second_Outcome) %>%
+        rename_with(~ gsub("Second_", "", .), .cols = everything())
+)
+move_summary <- move_effectiveness_df %>%
+    group_by(Outcome, Most_Effective_Move = cut(Most_Effective_Move, breaks = c(0, 0.5, 1, 2, 4))) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    ungroup() %>%
+    filter(!is.na(Most_Effective_Move))
+
+ggplot(move_summary, aes(x = Most_Effective_Move, y = Count, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7, alpha = 0.8) +
+    labs(title = "Outcome Distribution by Move Effectiveness",
+         x = "Effectiveness", y = "Count") +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors)+
+    scale_x_discrete(labels =  c(
+        
+    )
+)
+```
+
+This also applies to the move type effectiveness
+
+How about the Pokemon that lost even though they have type advantages?
+
+```{r}
+df <- df %>%
+    mutate(
+        First_Combined_Effectiveness = coalesce(First_Type1_Effectiveness * First_Type2_Effectiveness, First_Type1_Effectiveness),
+        Second_Combined_Effectiveness = coalesce(Second_Type1_Effectiveness * Second_Type2_Effectiveness, Second_Type1_Effectiveness)
+)
+    
+loser_df <- bind_rows(
+    df %>%
+        filter(First_Combined_Effectiveness < 1) %>%
+        select(First_HP, First_Attack, First_Defense, First_Sp_Atk, First_Sp_Def, First_Speed, First_Is_Legendary, First_Move1_Effectiveness, First_Move2_Effectiveness, First_Move3_Effectiveness, First_Move4_Effectiveness, First_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything()),
+    
+    df %>%
+        filter(Second_Combined_Effectiveness < 1) %>%
+        select(Second_HP, Second_Attack, Second_Defense, Second_Sp_Atk, Second_Sp_Def, Second_Speed, Second_Is_Legendary, Second_Move1_Effectiveness, Second_Move2_Effectiveness, Second_Move3_Effectiveness, Second_Move4_Effectiveness, Second_Outcome) %>%
+        rename_with(~ gsub("First_", "", .), .cols = everything())
+)
+
+loser_long_df <- loser_df %>%
+    pivot_longer(cols = c(HP, Attack, Defense, Sp_Atk, Sp_Def, Speed, Is_Legendary, Move1_Effectiveness, Move2_Effectiveness, Move3_Effectiveness, Move4_Effectiveness),
+                 names_to = "Stat", values_to = "Value")
+
+ggplot(winner_stats_long_df, aes(x = Stat, y = Value, fill = Outcome)) +
+    geom_boxplot() +
+    labs(title = "Pokemon Combat Stats Difference",
+         x = "Stat", y = "Value") +
+    theme_minimal() +
+    scale_fill_manual(values = outcome_colors, labels = c("Loser (w/ type advantage)", "Winner (w/o type advantage)"))
+```
+
+Once again, Speed proves to be a dominant factor, outclassing even type advantages. As a result, Pokémon with type disadvantages can still achieve a higher win probability if they are faster than their opponent, allowing them to strike first and potentially overpower the opposing Pokémon before it can act.
+
+### 4.3. Moveset Combination
+
+To address the third research question, we will utilize the **"Category"** column in the dataset. Moves are classified into three categories: **physical**, **special**, and **status** .
+
+-   **Physical moves** deal damage based on the attacker's Attack stat and the target's Defense stat.
+
+-   **Special moves** calculate damage using the attacker's Special Attack stat and the target's Special Defense stat.
+
+-   **Status moves** do not inflict direct damage but instead affect the battlefield or Pokémon stats. For example, they can raise or lower stats, apply status effects (e.g., paralysis, sleep), or manipulate environmental conditions like weather or terrain.
+
+By analysing the distribution and effectiveness of these move categories, we can determine whether certain combinations—such as balancing physical and special moves or incorporating strategic status moves—lead to higher win rates.
+
+```{r}
+df <- df %>%
+    rowwise() %>%
+    mutate(
+        Physical_Count = sum(c_across(starts_with("First_Category_Move")) == "Physical", na.rm = TRUE),
+        Special_Count = sum(c_across(starts_with("First_Category_Move")) == "Special", na.rm = TRUE),
+        Status_Count = sum(c_across(starts_with("First_Category_Move")) == "Status", na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    mutate(Move_Set_Combination = case_when(
+        Physical_Count == 2 & Special_Count == 2 ~ "2 Physical, 2 Special",
+        Physical_Count == 1 & Special_Count == 3 ~ "1 Physical, 3 Special",
+        Physical_Count == 3 & Special_Count == 1 ~ "3 Physical, 1 Special",
+        Physical_Count == 4 ~ "4 Physical",
+        Special_Count == 4 ~ "4 Special",
+        Status_Count > 0 ~ "Mixed with Status",
+        TRUE ~ "Other"
+    ))
+
+move_set_summary <- df %>%
+    group_by(Move_Set_Combination, First_Outcome) %>%
+    summarize(Count = n(), .groups = "drop") %>%
+    group_by(Move_Set_Combination) %>%
+    mutate(Total = sum(Count),
+           Proportion = Count / Total) %>%
+    filter(First_Outcome == "Winner") %>% # Focus on win rates
+    ungroup()
+
+combination_colors <- c(
+    "2 Physical, 2 Special" = "#80ed99",
+    "1 Physical, 3 Special" = "#f7dc6f",
+    "3 Physical, 1 Special" = "#f28482",
+    "4 Physical" = "#a8dadc",
+    "4 Special" = "#ffafcc",
+    "Mixed with Status" = "#b8c0ff"
+)
+
+# Plot win rates by move set combination
+ggplot(move_set_summary, aes(x = Move_Set_Combination, y = Proportion, fill = Move_Set_Combination)) +
+    geom_bar(stat = "identity", alpha = 0.8) +
+    labs(title = "Win Rates by Move Set Combination",
+         x = "Move Set Combination", y = "Win Rate") +
+    theme_minimal() +
+    scale_fill_manual(values = combination_colors) +
+    theme(
+        axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.position = "none"
+    )
+```
+
+Combinations of attacking moves prove to be more efficient, especially when paired with Speed . If a Pokémon is guaranteed to move first due to its high Speed stat, it can strategically utilize its four available moves to adapt to the situation and maximize damage output. This flexibility allows the Pokémon to exploit type weaknesses, cover its own vulnerabilities, or apply status effects effectively, making it a formidable opponent in battle.
+
+## 5. Model Training
+
+Now that we have analyzed the key factors contributing to a "Winning" Pokémon, we can leverage this understanding to build a predictive model. For this purpose, we will train XGBoost (eXtreme Gradient Boosting) models, which are well-suited for handling complex datasets and capturing intricate relationships between features. This approach will enable us to make accurate predictions about battle outcomes based on the derived insights.
+
+### 5.1. All Features
+
+To begin with a straightforward approach, we can train the XGBoost model using all the engineered features obtained from the data wrangling and web scraping process. The dataset currently contains a total of **58 features** . However, additional preprocessing steps are required to ensure compatibility with the model:
+
+1.  **Binary Label Creation:**\
+    Since the raw label "Outcome" is not in binary form, we need to create a new label called **"First_Outcome"** . This label will indicate whether the first Pokémon wins (**"Winner"** ) or loses (**"Loser"** ) the battle.
+
+2.  **Handling Missing Values in "Power" Columns:**\
+    For move "Power" columns, replace empty strings and **`None`** values with **0** . This indicates that the move is a status-based move, which does not deal direct damage.
+
+3.  **Handling Missing Values in "Accuracy" Columns:**\
+    Similarly, for "Accuracy" columns, replace empty strings and **`None`** values with **100** , as status moves always have an accuracy of 100.
+
+4.  **Converting Non-Numeric Columns:**\
+    XGBoost models do not support character or logical data types. Therefore, all remaining non-numeric columns must be converted to numeric types (e.g., using one-hot encoding or label encoding for categorical variables).
+
+These preprocessing steps will ensure the dataset is properly formatted and ready for training the XGBoost model.
+
+```{r}
+df <- readRDS("files/data/final_pokemon_data.rds")
+df <- df %>%
+    mutate(
+        First_Outcome = ifelse(First_pokemon == Winner, "Winner", "Loser"),
+        First_Outcome = ifelse(First_Outcome == "Winner", 1, 0),
+        across(ends_with("Power"), ~ ifelse(.x == "" | .x == "None", 0, as.numeric(.x))),
+        across(ends_with("Accuracy"), ~ ifelse(.x == "" | .x == "None", 100, as.numeric(.x))),
+        across(where(is.character) | where(is.logical), ~ as.numeric(.))
+    )%>%
+    select(First_Type1, First_Type2, First_HP, First_Attack, First_Defense,
+           First_Sp_Atk, First_Sp_Def, First_Speed, First_Is_Legendary,
+           First_Move1_Type, First_Category_Move1, First_PP_Move1,
+           First_Move1_Power, First_Move1_Accuracy,
+           First_Move2_Type, First_Category_Move2, First_PP_Move2,
+           First_Move2_Power, First_Move2_Accuracy,
+           First_Move3_Type, First_Category_Move3, First_PP_Move3,
+           First_Move3_Power, First_Move3_Accuracy,
+           First_Move4_Type, First_Category_Move4, First_PP_Move4,
+           First_Move4_Power, First_Move4_Accuracy,
+           Second_Type1, Second_Type2, Second_HP, Second_Attack, Second_Defense,
+           Second_Sp_Atk, Second_Sp_Def, Second_Speed, Second_Is_Legendary,
+           Second_Move1_Type, Second_Category_Move1, Second_PP_Move1,
+           Second_Move1_Power, Second_Move1_Accuracy,
+           Second_Move2_Type, Second_Category_Move2, Second_PP_Move2,
+           Second_Move2_Power, Second_Move2_Accuracy,
+           Second_Move3_Type, Second_Category_Move3, Second_PP_Move3,
+           Second_Move3_Power, Second_Move3_Accuracy,
+           Second_Move4_Type, Second_Category_Move4, Second_PP_Move4,
+           Second_Move4_Power, Second_Move4_Accuracy,
+           First_Outcome)
+```
+
+We will split the data into train and test data with 80:20 split values.
+
+```{r}
+prepare_training_data <- function(df, train_pct = 0.8){
+    set.seed(123)
+    
+    train_indices <- createDataPartition(df$First_Outcome, p = 0.8, list = FALSE)
+    train_data <- df[train_indices, ]
+    test_data <- df[-train_indices, ]
+    
+    features <- setdiff(names(train_data), "First_Outcome") # Exclude the target column
+    train_matrix <- as.matrix(train_data[features])
+    test_matrix <- as.matrix(test_data[features])
+    train_labels <- train_data$First_Outcome
+    test_labels <- test_data$First_Outcome
+
+    return(list(
+        train_matrix = train_matrix,
+        test_matrix = test_matrix,
+        train_labels = train_labels,
+        test_labels = test_labels
+    ))
+}
+```
+
+The XGBoost models will be trained using the following hyperparameters:
+
+-   **`max_depth = 6`**: The maximum depth for each tree.
+
+-   **`eta = 0.1`**: The learning rate, which controls the contribution of each tree.
+
+-   **`n_rounds = 100`:** The number of boosting rounds (iterations).
+
+Using the predefined hyperparameters, we can then train the model and predict the test dataset.
+
+```{r}
+training_data <- prepare_training_data(df)
+train_matrix <- training_data$train_matrix
+test_matrix <- training_data$test_matrix
+train_labels <- as.character(training_data$train_labels)
+test_labels <- as.character(training_data$test_labels)
+
+xgb_model <- xgboost(
+    data = train_matrix,
+    label = train_labels,
+    max.depth = 6,        # Maximum depth of each tree
+    eta = 0.1,            # Learning rate
+    nrounds = 100,        # Number of boosting rounds
+    objective = "binary:logistic", # Binary classification
+    eval_metric = "error", # Evaluation metric
+    verbose = 0           # Print progress
+)
+
+pred_probs <- predict(xgb_model, test_matrix)
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+```
+
+Now, let’s proceed to make predictions. A Pokémon will be predicted as the ***Loser*** if the predicted probability of losing is above 0.5 . Otherwise, it will be classified as the ***Winner***.
+
+```{r}
+pred_probs <- predict(xgb_model, test_matrix)
+
+# Convert probabilities to binary predictions (threshold = 0.5)
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+
+# Calculate metrics
+conf_matrix <- confusionMatrix(factor(pred_labels), factor(test_labels))
+print(conf_matrix)
+```
+
+We have a solid starting model with an accuracy of approximately **94.81%** . However, the model's performance on the positive class (1) is slightly weaker, as reflected in the lower **recall (sensitivity)** value. This suggests that the model may struggle somewhat to correctly identify instances of the positive class.
+
+To better understand the model's behavior and decision-making process, let’s examine the **feature importance** for this model. This will help us identify which features contribute most significantly to the predictions.
+
+```{r}
+importance_matrix <- xgb.importance(feature_names = colnames(train_matrix), model = xgb_model)
+xgb.plot.importance(importance_matrix, top_n = 10) # Show top 10 features
+```
+
+As expected, both speeds are the two highest predictors, followed by attack stats.
+
+### 5.2. Engineered Features
+
+An accuracy of 94% with 58 features is impressive, but can we further improve the model? Based on the EDA conducted earlier, we can refine the feature set by including only the most impactful features, such as:
+
+-   **Type effectiveness** (e.g., maximum damage multipliers like 2x or 4x for moves targeting opponent weaknesses).
+
+-   **Move combination counts** (e.g., the number of physical, special, and status moves in a Pokémon's moveset).
+
+At the same time, we can exclude less relevant or redundant features that may introduce noise or overcomplicate the model. This streamlined approach could enhance performance while maintaining interpretability. Let’s proceed with this optimized feature selection and evaluate its impact on the model.
+
+```{r}
+df <- readRDS("files/data/final_pokemon_data.rds")
+df <- df %>%
+    rowwise() %>%
+    mutate(
+        # Pokemon's type effectiveness
+        First_Type_Max_Effectiveness = coalesce(max(c_across(starts_with("First_Type") & ends_with("Effectiveness")), na.rm = TRUE), First_Type1_Effectiveness),
+        Second_Type_Max_Effectiveness = coalesce(max(c_across(starts_with("Second_Type") & ends_with("Effectiveness")), na.rm = TRUE), Second_Type1_Effectiveness),
+        # Pokemon's move effectiveness
+        First_Move_Max_Effectiveness = max(c_across(starts_with("First_Move") & ends_with("Effectiveness")), na.rm = TRUE),
+        Second_Move_Max_Effectiveness = max(c_across(starts_with("Second_Move") & ends_with("Effectiveness")), na.rm = TRUE),
+        # Move combination count
+        First_Physical_Move_Count = sum(c_across(starts_with("First_Category_Move")) == "Physical", na.rm = TRUE),
+        First_Special_Move_Count = sum(c_across(starts_with("First_Category_Move")) == "Special", na.rm = TRUE),
+        First_Status_Move_Count = sum(c_across(starts_with("First_Category_Move")) == "Status", na.rm = TRUE),
+        Second_Physical_Move_Count = sum(c_across(starts_with("Second_Category_Move")) == "Physical", na.rm = TRUE),
+        Second_Special_Move_Count = sum(c_across(starts_with("Second_Category_Move")) == "Special", na.rm = TRUE),
+        Second_Status_Move_Count = sum(c_across(starts_with("Second_Category_Move")) == "Status", na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    mutate(
+        First_Outcome = ifelse(First_pokemon == Winner, "Winner", "Loser"),
+        First_Outcome = ifelse(First_Outcome == "Winner", 1, 0),
+        across(ends_with("Power"), ~ ifelse(.x == "" | .x == "None", 0, as.numeric(.x))),
+        across(ends_with("Accuracy"), ~ ifelse(.x == "" | .x == "None", 100, as.numeric(.x))),
+        across(where(is.character) | where(is.logical), ~ as.numeric(.))
+    )%>%
+    select(First_Type1, First_Type2, First_HP, First_Attack, First_Defense,
+           First_Sp_Atk, First_Sp_Def, First_Speed, First_Is_Legendary,
+           First_Type_Max_Effectiveness, First_Move_Max_Effectiveness,
+           First_Physical_Move_Count, First_Special_Move_Count,
+           First_Status_Move_Count,
+           Second_Type1, Second_Type2, Second_HP, First_Attack, First_Defense,
+           Second_Sp_Atk, Second_Sp_Def, Second_Speed, Second_Is_Legendary,
+           Second_Type_Max_Effectiveness, Second_Move_Max_Effectiveness,
+           Second_Physical_Move_Count, Second_Special_Move_Count,
+           Second_Status_Move_Count, First_Outcome)
+
+saveRDS(df, file = "files/data/pokemon_data_cleaned.rds") # Save and load the data to save time
+```
+
+Train it with the same hyperparameters
+
+```{r}
+df <- readRDS("files/data/pokemon_data_cleaned.rds")
+training_data <- prepare_training_data(df)
+train_matrix <- training_data$train_matrix
+test_matrix <- training_data$test_matrix
+train_labels <- as.character(training_data$train_labels)
+test_labels <- as.character(training_data$test_labels)
+
+xgb_model <- xgboost(
+    data = train_matrix,
+    label = train_labels,
+    max.depth = 6,        # Maximum depth of each tree
+    eta = 0.1,            # Learning rate
+    nrounds = 100,        # Number of boosting rounds
+    objective = "binary:logistic", # Binary classification
+    eval_metric = "error", # Evaluation metric
+    scale_pos_weight = sum(train_labels == 0) / sum(train_labels == 1),
+    verbose = 0           # Print progress
+)
+
+pred_probs <- predict(xgb_model, test_matrix)
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+```
+
+Now let's look at the result.
+
+```{r}
+pred_probs <- predict(xgb_model, test_matrix)
+
+# Convert probabilities to binary predictions (threshold = 0.5)
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)
+
+# Calculate metrics
+conf_matrix <- confusionMatrix(factor(pred_labels), factor(test_labels))
+print(conf_matrix)
+```
+
+The feature importance still highlights the dominance of **Speed stats** , but now we can clearly see the significance of **Pokémon type effectiveness** coming into play. By further refining the model and removing additional less critical features, we were able to halve the total number of features while achieving an improved accuracy of **95.08%** .
+
+Notably, both the **sensitivity (recall for the positive class)** and **specificity (recall for the negative class)** values also showed improvement. This demonstrates that reducing feature redundancy not only simplified the model but also enhanced its overall performance and robustness.
+
+```{r}
+importance_matrix <- xgb.importance(feature_names = colnames(train_matrix), model = xgb_model)
+xgb.plot.importance(importance_matrix, top_n = 10) # Show top 10 features
+```
+
+Save the final XGBoost model.
+
+```{r}
+xgb.save(xgb_model, "files/models/pokemon_prediction_model.xgb")
+```
+
+### 5.3. Pokemon Clustering
+
+The project also incorporates **Pokémon strategic team building** as a key feature, allowing players to construct and comprehend the roles of each Pokémon in their team. In battles, a player can bring up to six different Pokémon, and assembling an optimal team with diverse Pokémon that can cover each other's weaknesses significantly increases the likelihood of winning.
+
+To begin this analysis, we will use the raw Pokémon compendium dataset obtained from *Kaggle*.
+
+```{r}
+df <- read_csv("files/data/pokemon-challenge/pokemon.csv")
+df <- df %>%
+    mutate(
+        across(where(is.character) | where(is.logical), ~ as.numeric(.))
+    )
+```
+
+Next, we will scale the numeric columns since they have different ranges. Scaling them can make the following steps easier.
+
+```{r}
+scaled_data <- scale(df)
+scaled_df <- as.data.frame(scaled_data)
+
+nzv_columns <- nearZeroVar(scaled_df, saveMetrics = TRUE)
+
+# Extract the names of constant or near-zero variance columns
+problematic_columns <- rownames(nzv_columns[nzv_columns$zeroVar | nzv_columns$nzv, , drop = FALSE])
+scaled_df <- scaled_df[, !colnames(scaled_df) %in% problematic_columns]
+```
+
+Recall that our dataset contains 58 features , which would make fitting a clustering model computationally intensive and challenging to interpret. To address this, we can first apply PCA (Principal Component Analysis) to reduce the dimensionality of the data to just two features . This not only simplifies the clustering process but also makes it easier to visualize the results in a 2D plot.
+
+```{r}
+# Perform PCA
+pca_result <- prcomp(scaled_df, center = TRUE, scale. = TRUE)
+
+# Extract the first two principal components
+pca_data <- data.frame(
+    PC1 = pca_result$x[, 1],
+    PC2 = pca_result$x[, 2]
+)
+
+# View the explained variance
+summary_pca <- summary(pca_result)
+print(summary_pca$importance)
+```
+
+Next, we find the number of optimal `k` using the elbow method
+
+```{r}
+wss <- fviz_nbclust(pca_data, kmeans, method = "wss")
+wss
+```
+
+The most optimal number of `k` is 9 or 10.
+
+```{r}
+set.seed(123)
+k <- 9
+kmeans_model <- kmeans(pca_data, centers = k, nstart = 25)
+
+# Add cluster assignments to the PCA data
+pca_data$Cluster <- as.factor(kmeans_model$cluster)
+```
+
+```{r}
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster)) +
+    geom_point(size = 2, alpha = 0.8) +
+    labs(title = "K-Means Clustering with PCA",
+         x = "Principal Component 1", y = "Principal Component 2") +
+    theme_minimal() +
+    theme(legend.position = "top")
+```
+
+And with that, we have reached the conclusion of the analysis for this dataset. We have conducted a comprehensive exploration and modeling process, covering a sufficient range of analyses to address the problem at the heart of this project. This work can serve as an **initial model prototype** , laying the foundation for potential integration into the real Pokémon game system in the future.
+
+By refining the model further and incorporating additional features or real-time data, this prototype could evolve into a powerful tool for players to make informed decisions during battles, enhancing both strategic gameplay and competitive performance.
