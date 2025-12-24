@@ -278,10 +278,172 @@ cat("Scraping time:", round(as.numeric(execution_time, units = "secs"), 2), "sec
 
 
 ### JOIN AND ASSEMBLE ###
-pokemon_df <- read_csv("data/pokemon.csv")
-pokemon_moveset_df <- readRDS("data/pokemon_moveset.rds")
-move_data_df <- read_csv("data/move-data.csv")
-pokemon_combat_df <- read_csv("data/combats.csv")
-effectiveness_df <- get_effectiveness_type_chart()
+pokemon_df <- read_csv("data/pokemon.csv") # Pokemon list
+pokemon_moveset_df <- readRDS("data/pokemon_moveset.rds") # Pokemon moveset
+move_data_df <- read_csv("data/move-data.csv") # Move data
+pokemon_combat_df <- read_csv("data/combats.csv") # Combat history
+effectiveness_df <- get_effectiveness_type_chart() # Type effectiveness
 
+calculate_effectiveness <- function(move_type, opponent_type_1, opponent_type_2, effectiveness_df) {
+  if(is.na(move_type)) {
+    return(NA)
+  }
+  
+  if(!is.na(opponent_type_1)) {
+    type1_multiplier <- effectiveness_df %>%
+      filter(Attacking == opponent_type_1) %>%
+      pull(as.character(move_type)) %>%
+      as.numeric()
+  } else {
+    type1_multiplier <- 1
+  }
+  
+  if(!is.na(opponent_type_2)) {
+    type2_multiplier <- effectiveness_df %>%
+      filter(Attacking == opponent_type_2) %>%
+      pull(as.character(move_type)) %>%
+      as.numeric()
+  } else {
+    type2_multiplier <- 1
+  }
+  
+  return(type1_multiplier * type2_multiplier)
+}
 
+preprocess_pokemon_data <- function(pokemon_df, pokemon_moveset_df, move_data_df, pokemon_combat_df, effectiveness_df) {
+  
+  # Preprocess pokedex data
+  colnames(pokemon_df) <- c("No", "Name", "Type1", "Type2",
+                            "HP", "Attack", "Defense", "Sp_Atk",
+                            "Sp_Def", "Speed", "Generation", "Is_Legendary")
+  
+  # Preprocess move data
+  move_data_df <- move_data_df %>%
+    mutate(Power = ifelse(is.na(Power), 0, Power),
+           Accuracy = ifelse(is.na(Accuracy), 100, Accuracy)) %>%
+    select(-Index, -Contest, -Generation)
+  
+  pokemon_moveset_df <- pokemon_moveset_df %>%
+    filter(!Is_Filled_Backwards) %>%
+    select(Original_Name, Move1, Move2, Move3, Move4) %>%
+    left_join(move_data_df, by = join_by(Move1 == Name)) %>%
+    rename(
+      Move1_Type = Type,
+      Move1_Power = Power,
+      Move1_Accuracy = Accuracy
+    ) %>%
+    left_join(move_data_df, by = join_by(Move2 == Name), suffix = c("_Move1", "_Move2")) %>%
+    rename(
+      Move2_Type = Type,
+      Move2_Power = Power,
+      Move2_Accuracy = Accuracy
+    ) %>%
+    left_join(move_data_df, by = join_by(Move3 == Name)) %>%
+    rename(
+      Move3_Type = Type,
+      Move3_Power = Power,
+      Move3_Accuracy = Accuracy
+    ) %>%
+    left_join(move_data_df, by = join_by(Move4 == Name), suffix = c("_Move3", "_Move4")) %>%
+    rename(
+      Move4_Type = Type,
+      Move4_Power = Power,
+      Move4_Accuracy = Accuracy
+    )
+  
+  # Preprocess pokemon combat
+  pokemon_combat_df <- pokemon_combat_df %>%
+    # Join with pokedex table to find pokemon info details (stats)
+    left_join(pokemon_df, by = join_by(First_pokemon == No)) %>%
+    rename_with(~ paste0("First_", .), .cols = c("Name", "Type1", "Type2", "HP", "Attack", "Defense", "Sp_Atk", "Sp_Def", "Speed", "Generation", "Is_Legendary")) %>%
+    left_join(pokemon_df, by = join_by(Second_pokemon == No)) %>%
+    rename_with(~ paste0("Second_", .), .cols = c("Name", "Type1", "Type2", "HP", "Attack", "Defense", "Sp_Atk", "Sp_Def", "Speed", "Generation", "Is_Legendary")) %>%
+    
+    # Join with moveset table
+    left_join(pokemon_moveset_df, by = join_by(First_Name == Original_Name)) %>%
+    rename_with(~ paste0("First_", .), .cols = c(starts_with("Move"), starts_with("Category"), starts_with("PP"))) %>%
+    left_join(pokemon_moveset_df, by = join_by(Second_Name == Original_Name)) %>%
+    rename_with(~ paste0("Second_", .), .cols = c(starts_with("Move"), starts_with("Category"), starts_with("PP"))) %>%
+    
+    # Add type effectiveness calculation
+    mutate(
+      First_Type1_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Type1,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      First_Type2_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Type2,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Type1_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Type1,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Type2_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Type2,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+      
+      First_Move1_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move1_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      First_Move2_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move2_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      First_Move3_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move3_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      First_Move4_Effectiveness = mapply(calculate_effectiveness,
+                                         First_Move4_Type,
+                                         Second_Type1,
+                                         Second_Type2,
+                                         MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Move1_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Move1_Type,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Move2_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Move2_Type,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Move3_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Move3_Type,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+      Second_Move4_Effectiveness = mapply(calculate_effectiveness,
+                                          Second_Move4_Type,
+                                          First_Type1,
+                                          First_Type2,
+                                          MoreArgs = list(effectiveness_df = effectiveness_df)),
+    ) %>%
+    
+    # Fill the remaining columns with 0 for numeric and empty string "" for characters
+    mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>% 
+    mutate(across(where(is.character), ~ replace_na(.x, "")))
+  
+  return(pokemon_combat_df)
+}
+
+start_time <- Sys.time()
+
+final_df <- preprocess_pokemon_data(pokemon_df, pokemon_moveset_df, move_data_df, pokemon_combat_df, effectiveness_df)
+saveRDS(final_df, file = "data/final_pokemon_data.rds")
+
+end_time <- Sys.time()
+execution_time <- end_time - start_time
+cat("Execution time:", round(as.numeric(execution_time, units = "secs"), 2), "seconds\n")
+
+### END OF JOIN AND ASSEMBLE ###
