@@ -318,256 +318,184 @@ preprocess_data <- function(chosen_pokemon_df, effectiveness_df) {
 
 assembled_df <- assemble_data(pokemon_df, pokemon_moveset_df, move_data_df, effectiveness_df)
 
-# Enhanced UI with Pokemon theme
 css_styles <- tags$head(
   tags$style(HTML("
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Roboto:wght@300;400;500;700&display=swap');
-        
-        :root {
-            --poke-primary: #FF6B6B;
-            --poke-secondary: #4ECDC4;
-            --poke-accent: #FFE66D;
-            --poke-dark: #2C3E50;
-            --poke-light: #F7FFF7;
-            --poke-success: #7AC74C;
-            --poke-info: #6390F0;
-            --poke-warning: #F7D02C;
-            --poke-danger: #C22E28;
-        }
-        
-        body {
-            font-family: 'Roboto', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            margin: 0;
-            padding: 0;
-        }
-        
-        .pokemon-title {
-            font-family: 'Orbitron', monospace;
-            font-weight: 900;
-            font-size: 3.5rem;
-            text-align: center;
-            color: var(--poke-light);
-            text-shadow: 3px 3px 6px rgba(0,0,0,0.5);
-            margin-bottom: 2rem;
-            letter-spacing: 2px;
-            background: linear-gradient(45deg, var(--poke-primary), var(--poke-accent));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        
-        .pokemon-subtitle {
-            text-align: center;
-            color: var(--poke-light);
-            font-size: 1.2rem;
-            margin-bottom: 2rem;
-            opacity: 0.9;
-        }
-        
-        .pokemon-card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
-            border: 3px solid var(--poke-accent);
-            transition: all 0.3s ease;
-        }
-        
-        .pokemon-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-        }
-        
-        .pokemon-card h4 {
-            font-family: 'Orbitron', monospace;
-            color: var(--poke-dark);
-            text-align: center;
-            margin-bottom: 1rem;
-            font-weight: 700;
-            font-size: 1.3rem;
-        }
-        
-        .pokemon-select {
-            width: 100%;
-            padding: 12px 15px;
-            border: 2px solid var(--poke-secondary);
-            border-radius: 10px;
-            font-size: 1rem;
-            background: white;
-            transition: all 0.3s ease;
-            margin-bottom: 1rem;
-        }
-        
-        .pokemon-select:focus {
-            outline: none;
-            border-color: var(--poke-primary);
-            box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.2);
-        }
-        
-        .pokemon-image-container {
-            text-align: center;
-            margin: 1rem 0;
-            padding: 1rem;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            border-radius: 15px;
-            border: 2px solid var(--poke-accent);
-        }
-        
-        .pokemon-image-container img {
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .pokemon-info {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem;
-            border-radius: 10px;
-            margin-top: 1rem;
-            font-size: 2.0rem;
-            line-height: 1.6;
-        }
-        
-        .pokemon-info strong {
-            color: var(--poke-accent);
-            font-weight: 700;
-        }
-        
-        .battle-section {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 2rem;
-            margin: 2rem 0;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
-            border: 3px solid var(--poke-primary);
-        }
-        
-        .battle-title {
-            font-family: 'Orbitron', monospace;
-            font-weight: 900;
-            font-size: 2.5rem;
-            text-align: center;
-            color: var(--poke-dark);
-            margin-bottom: 1.5rem;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .prediction-result {
-            text-align: center;
-            font-size: 1.5rem;
-            font-weight: 700;
-            padding: 1.5rem;
-            border-radius: 15px;
-            margin-bottom: 2rem;
-            background: linear-gradient(135deg, var(--poke-primary), var(--poke-accent));
-            color: white;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
-        }
-        
-        .stats-plot-container {
-            background: white;
-            border-radius: 15px;
-            padding: 1rem;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        
-        .type-badge {
-            display: inline-block;
-            padding: 4px 8px;
-            margin: 2px;
-            border-radius: 12px;
-            font-size: 2.0rem;
-            font-weight: 600;
-            color: white;
-            text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
-        }
-        
-        .move-item {
-            display: inline-block;
-            margin: 2px;
-            padding: 3px 8px;
-            border-radius: 8px;
-            font-size: 2.0rem;
-            font-weight: 500;
-            color: white;
-            text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
-        }
-        
-        .effectiveness-section {
-            margin: 0.5rem 0;
-        }
-        
-        .battle-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 2rem;
-            margin: 2rem 0;
-        }
-        
-        .vs-symbol {
-            font-family: 'Orbitron', monospace;
-            font-size: 3rem;
-            font-weight: 900;
-            color: var(--poke-primary);
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-            background: var(--poke-accent);
-            border-radius: 50%;
-            width: 80px;
-            height: 80px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }
-        
-        .pokemon-name {
-            font-family: 'Orbitron', monospace;
-            font-weight: 700;
-            font-size: 1.4rem;
-            color: var(--poke-dark);
-            text-align: center;
-            margin-bottom: 0.5rem;
-        }
-        
-        .legendary-indicator {
-            background: linear-gradient(45deg, #FFD700, #FFA500);
-            color: var(--poke-dark);
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            margin-left: 0.5rem;
-        }
-        
-        @media (max-width: 768px) {
-            .pokemon-title {
-                font-size: 2.5rem;
-            }
-            
-            .battle-container {
-                flex-direction: column;
-                gap: 1rem;
-            }
-            
-            .vs-symbol {
-                width: 60px;
-                height: 60px;
-                font-size: 2rem;
-            }
-        }
-        
-        #welcome-notification {
-          background-color: #ff0000; /* Pokémon Red */
-          color: white;
-          font-weight: bold;
-          border: 2px solid #3b4cca; /* Pokémon Blue */
-        }
-    "))
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Roboto:wght@300;400;500;700&display=swap');
+    
+    :root {
+        --poke-primary: #FF6B6B;
+        --poke-secondary: #4ECDC4;
+        --poke-accent: #FFE66D;
+        --poke-dark: #2C3E50;
+        --poke-light: #F7FFF7;
+        --poke-success: #7AC74C;
+        --poke-info: #6390F0;
+        --poke-warning: #F7D02C;
+        --poke-danger: #C22E28;
+    }
+    
+    body {
+        font-family: 'Roboto', sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+    }
+    
+    .pokemon-title {
+        font-family: 'Orbitron', monospace;
+        font-weight: 900;
+        font-size: 3.5rem;
+        text-align: center;
+        margin-bottom: 0.5rem;
+        background: linear-gradient(45deg, var(--poke-light), var(--poke-accent));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    .pokemon-subtitle {
+        text-align: center;
+        color: var(--poke-light);
+        font-size: 1.2rem;
+        margin-bottom: 3rem;
+        opacity: 0.8;
+    }
+    
+    .pokemon-image-container {
+        text-align: center;
+        margin: 1rem 0;
+        padding: 1rem;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        border-radius: 15px;
+        border: 2px solid var(--poke-accent);
+    }
+    
+    /* Card Adjustments */
+    .pokemon-card {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 1.5rem;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+        border: 3px solid var(--poke-accent);
+        transition: all 0.3s ease;
+        height: 100%; /* Ensures columns match height */
+    }
+    
+    /* Center Column Specific Styling */
+    .battle-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.5rem;
+    }
+    
+    .vs-symbol {
+        font-family: 'Orbitron', monospace;
+        font-size: 2.5rem;
+        font-weight: 900;
+        color: var(--poke-primary);
+        background: var(--poke-accent);
+        border-radius: 50%;
+        width: 70px;
+        height: 70px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 20px rgba(255, 230, 109, 0.5);
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 230, 109, 0.7); }
+        70% { transform: scale(1.1); box-shadow: 0 0 0 15px rgba(255, 230, 109, 0); }
+        100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 230, 109, 0); }
+    }
+    
+    .battle-section {
+        width: 100%;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        padding: 1.5rem;
+        border: 3px solid var(--poke-primary);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+
+    .battle-title {
+        font-family: 'Orbitron', monospace;
+        font-size: 1.5rem;
+        color: var(--poke-dark);
+        text-align: center;
+        margin-top: 0;
+    }
+    
+    /* Main Info Box */
+    .pokemon-info {
+        background: linear-gradient(135deg, #4b6cb7 0%, #182848 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-top: 1rem;
+        /* Font adjustments */
+        font-size: 1.6rem; 
+        font-weight: 500;
+        line-height: 1.4;
+    }
+    
+    /* Individual Stat Labels (if you use strong tags) */
+    .pokemon-info strong {
+        color: var(--poke-accent);
+        font-weight: 900;
+        text-transform: uppercase;
+        font-size: 1.7rem;
+        display: inline-block;
+        margin-right: 5px;
+    }
+    
+    /* Badges for Types and Moves */
+    .type-badge, .move-item {
+        display: inline-block;
+        padding: 8px 15px;
+        margin: 5px;
+        border-radius: 15px;
+        font-size: 1.5rem; /* Large and readable */
+        font-weight: 800;
+        color: white;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    /* Effectiveness Section Header */
+    .effectiveness-section {
+        margin: 1.5rem 0;
+        font-size: 1.4rem;
+        border-top: 1px solid rgba(255,255,255,0.2);
+        padding-top: 10px;
+    }
+
+    .prediction-result {
+        background: linear-gradient(45deg, var(--poke-primary), #ff8e8e);
+        padding: 1rem;
+        border-radius: 12px;
+        font-size: 1.2rem;
+        font-weight: bold;
+        text-align: center;
+        color: white;
+    }
+    
+    /* Input styling */
+    .pokemon-select .control-label { display: none; } /* Hide empty label space */
+    .selectize-input {
+        border: 2px solid var(--poke-secondary) !important;
+        border-radius: 10px !important;
+        padding: 10px !important;
+    }
+
+    .stats-plot-container {
+        margin-top: 1rem;
+        background: white;
+        border-radius: 10px;
+        padding: 5px;
+    }
+  "))
 )
 
 # Define Enhanced UI
@@ -575,15 +503,15 @@ ui <- fluidPage(
   css_styles,
   
   # Application title
-  tags$h1("Pokémon Battle Predictor", class = "pokemon-title"),
+  tags$h1("Pokémon Battle Predictor (Gen XY)", class = "pokemon-title"),
   tags$p("Advanced AI-Powered Battle Analysis", class = "pokemon-subtitle"),
-  
-  # Pokemon Selection Row
+
+  # Main Row containing everything
   fluidRow(
-    column(5,
+    # COLUMN 1: YOUR POKEMON
+    column(4, # Adjusted to 4 for a balanced 4-4-4 split
            div(class = "pokemon-card",
                h4("🎮 Your Pokémon"),
-               # Wrap the input in a div to apply the custom class
                div(class = "pokemon-select",
                    selectInput("pokemon1", "", choices = unique(pokemon_df$Name))
                ),
@@ -596,16 +524,28 @@ ui <- fluidPage(
            )
     ),
     
-    column(2,
+    # COLUMN 2: BATTLE ANALYSIS (NOW IN THE MIDDLE)
+    column(4, 
            div(class = "battle-container",
-               div(class = "vs-symbol", "VS")
+               div(class = "vs-symbol", "VS"),
+               
+               div(class = "battle-section",
+                   h3("🔮 Battle Prediction", class = "battle-title"),
+                   div(class = "prediction-result",
+                       textOutput("prediction_result")
+                   ),
+                   div(class = "stats-plot-container",
+                       # Height adjusted to fit better in a column
+                       plotlyOutput("stats_plot", height = "400px")
+                   )
+               )
            )
     ),
     
-    column(5,
+    # COLUMN 3: OPPONENT'S POKEMON
+    column(4, 
            div(class = "pokemon-card",
                h4("⚔️ Opponent's Pokémon"),
-               # Wrap the input in a div to apply the custom class
                div(class = "pokemon-select",
                    selectInput("pokemon2", "", choices = unique(pokemon_df$Name))
                ),
@@ -617,17 +557,6 @@ ui <- fluidPage(
                )
            )
     )
-  ),
-  
-  # Battle Analysis Section
-  div(class = "battle-section",
-      h3("🔮 Battle Prediction", class = "battle-title"),
-      div(class = "prediction-result",
-          textOutput("prediction_result")
-      ),
-      div(class = "stats-plot-container",
-          plotlyOutput("stats_plot", height = "500px")
-      )
   )
 )
 
@@ -705,7 +634,7 @@ server <- function(input, output, session) {
       layout(
         title = list(
           text = "⚔️ Pokémon Stats Comparison",
-          font = list(size = 24, family = "Orbitron", color = poke_palette$dark)
+          font = list(size = 20, family = "Orbitron", color = poke_palette$dark)
         ),
         xaxis = list(
           title = "Stat Value",
@@ -718,7 +647,11 @@ server <- function(input, output, session) {
         ),
         legend = list(
           title = list(text = "Pokémon", font = list(size = 14)),
-          font = list(size = 12)
+          font = list(size = 12),
+          orientation = "h",
+          xanchor = "center", 
+          x = 0.5, 
+          y = -0.3
         ),
         plot_bgcolor = "rgba(0,0,0,0)",
         paper_bgcolor = "rgba(0,0,0,0)",
@@ -730,13 +663,13 @@ server <- function(input, output, session) {
   # Enhanced type formatting with badges
   format_types_with_colors <- function(types, type_colors) {
     if (length(types) == 0 || all(is.na(types))) {
-      return("<span style='color: #999; font-style: italic;'>None</span>")
+      return("<span style='color: #999; font-style: italic; font-size: 20px;'>None</span>")
     }
     
     paste(
       sapply(types, function(type) {
         if (!is.na(type) && type %in% names(type_colors)) {
-          sprintf('<span class="type-badge" style="background-color: %s;">%s</span>',
+          sprintf('<span class="type-badge" style="background-color: %s; font-size: 20px;">%s</span>',
                   type_colors[type], type)
         } else {
           ""
@@ -749,7 +682,7 @@ server <- function(input, output, session) {
   # Enhanced move formatting
   format_moves_with_colors <- function(moves, move_types, type_colors) {
     if (length(moves) == 0 || all(is.na(moves))) {
-      return("<span style='color: #999; font-style: italic;'>No moves</span>")
+      return("<span style='color: #999; font-style: italic; font-size: 20px;'>No moves</span>")
     }
     
     paste(
@@ -757,7 +690,7 @@ server <- function(input, output, session) {
         move <- moves[i]
         move_type <- move_types[i]
         if (!is.na(move_type) && move_type %in% names(type_colors)) {
-          sprintf('<span class="move-item" style="background-color: %s;">%s</span>',
+          sprintf('<span class="move-item" style="background-color: %s; font-size: 20px;">%s</span>',
                   type_colors[move_type], move)
         } else {
           move
@@ -797,14 +730,14 @@ server <- function(input, output, session) {
     legendary_badge <- if (is_legendary) "<span class='legendary-indicator'>★ LEGENDARY</span>" else ""
     
     HTML(paste(
-      "<div class='pokemon-name' style=font-size: 24px;'>", pokemon1, legendary_badge, "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>🎯 Types:</strong><br>", format_types_with_colors(types, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>🛡️ Immune to:</strong><br>", format_types_with_colors(effectiveness_categories$immune_to, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>✨ Strongly resists:</strong><br>", format_types_with_colors(effectiveness_categories$strongly_resists, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>🔄 Resists:</strong><br>", format_types_with_colors(effectiveness_categories$resists, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>⚠️ Weak to:</strong><br>", format_types_with_colors(effectiveness_categories$weak_to, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>💥 Very weak to:</strong><br>", format_types_with_colors(effectiveness_categories$very_weak_to, type_colors), "</div>",
-      "<div class='effectiveness-section' style=font-size: 24px;'><strong>🎮 Moves:</strong><br>", format_moves_with_colors(moves, move_types, type_colors), "</div>"
+      "<div class='pokemon-name'>", pokemon1, legendary_badge, "</div>",
+      "<div class='effectiveness-section'><strong>🎯 Types:</strong><br>", format_types_with_colors(types, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>🛡️ Immune to:</strong><br>", format_types_with_colors(effectiveness_categories$immune_to, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>✨ Strongly resists:</strong><br>", format_types_with_colors(effectiveness_categories$strongly_resists, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>🔄 Resists:</strong><br>", format_types_with_colors(effectiveness_categories$resists, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>⚠️ Weak to:</strong><br>", format_types_with_colors(effectiveness_categories$weak_to, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>💥 Very weak to:</strong><br>", format_types_with_colors(effectiveness_categories$very_weak_to, type_colors), "</div>",
+      "<div class='effectiveness-section'><strong>🎮 Typical Moves:</strong><br>", format_moves_with_colors(moves, move_types, type_colors), "</div>"
     ))
   })
   
@@ -845,7 +778,7 @@ server <- function(input, output, session) {
       "<div class='effectiveness-section'><strong>🔄 Resists:</strong><br>", format_types_with_colors(effectiveness_categories$resists, type_colors), "</div>",
       "<div class='effectiveness-section'><strong>⚠️ Weak to:</strong><br>", format_types_with_colors(effectiveness_categories$weak_to, type_colors), "</div>",
       "<div class='effectiveness-section'><strong>💥 Very weak to:</strong><br>", format_types_with_colors(effectiveness_categories$very_weak_to, type_colors), "</div>",
-      "<div class='effectiveness-section'><strong>🎮 Moves:</strong><br>", format_moves_with_colors(moves, move_types, type_colors), "</div>"
+      "<div class='effectiveness-section'><strong>🎮 Typical Moves:</strong><br>", format_moves_with_colors(moves, move_types, type_colors), "</div>"
     ))
   })
   
