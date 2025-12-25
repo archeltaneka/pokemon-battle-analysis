@@ -495,6 +495,53 @@ css_styles <- tags$head(
         border-radius: 10px;
         padding: 5px;
     }
+    
+    /* Footer styling */
+    .pokemon-footer {
+        margin-top: 50px;
+        padding: 40px 0;
+        background: rgba(28, 40, 51, 0.95);
+        border-top: 5px solid var(--poke-primary);
+        color: var(--poke-light);
+        text-align: center;
+        width: 100%;
+    }
+    
+    /* Pokéball Spinning Animation */
+    .pokeball-icon {
+        color: var(--poke-primary);
+        margin: 0 10px;
+        font-size: 1.2rem;
+        animation: fa-spin 5s infinite linear;
+    }
+    
+    .footer-links {
+        margin: 15px 0;
+    }
+    
+    .footer-links a {
+        color: var(--poke-accent);
+        font-family: 'Orbitron', sans-serif;
+        font-size: 1.1rem;
+        margin: 0 15px;
+        text-decoration: none;
+        transition: all 0.3s ease;
+    }
+    
+    .footer-links a:hover {
+        color: var(--poke-secondary);
+        transform: scale(1.1);
+        text-shadow: 0 0 10px var(--poke-secondary);
+    }
+    
+    .footer-disclaimer {
+        margin-top: 20px;
+        font-size: 0.75rem !important;
+        opacity: 0.5;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
   "))
 )
 
@@ -557,6 +604,29 @@ ui <- fluidPage(
                )
            )
     )
+  ),
+  
+  # Footer Section
+  div(class = "pokemon-footer",
+      div(class = "footer-content",
+          # Pokéball Icon + Name
+          tags$p(
+            icon("circle-dot", class = "pokeball-icon"), # Using circle-dot as a Pokéball stand-in
+            "Created by Archel Taneka Sutanto",
+            icon("circle-dot", class = "pokeball-icon")
+          ),
+          
+          # Social Media / GitHub Links
+          div(class = "footer-links",
+              tags$a(href = "https://github.com/archeltaneka", target = "_blank", 
+                     icon("github"), " GitHub"),
+              tags$a(href = "https://linkedin.com/in/archel-taneka-sutanto", target = "_blank", 
+                     icon("linkedin"), " LinkedIn")
+          ),
+          
+          tags$p(class = "footer-disclaimer", 
+                 "Pokémon and Pokémon character names are trademarks of Nintendo.")
+      )
   )
 )
 
