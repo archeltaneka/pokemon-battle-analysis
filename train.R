@@ -75,7 +75,7 @@ prepare_training_data <- function(df, train_pct = 0.8) {
 }
 
 
-df <- readRDS("files/data/final_pokemon_data.rds")
+df <- readRDS("data/final_pokemon_data.rds")
 training_data <- prepare_training_data(df)
 train_matrix <- training_data$train_matrix
 train_labels <- as.character(training_data$train_labels)
