@@ -53,9 +53,9 @@ get_effectiveness_type_chart <- function() {
 }
 
 # Load data
-pokemon_df <- read_csv("files/data/pokemon-challenge/pokemon.csv")
-pokemon_moveset_df <- readRDS("files/data/pokemon-challenge/pokemon_moveset.rds")
-move_data_df <- read_csv("files/data/competitive-pokemon-dataset/move-data.csv")
+pokemon_df <- read_csv("data/pokemon.csv")
+pokemon_moveset_df <- readRDS("data/pokemon_moveset.rds")
+move_data_df <- read_csv("data/move-data.csv")
 xgb_model <- xgb.load("files/models/pokemon_prediction_model.xgb")
 effectiveness_df <- get_effectiveness_type_chart()
 
