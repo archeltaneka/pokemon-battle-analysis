@@ -1,3 +1,13 @@
+required_packages <- c(
+  "tidyverse", "rvest", "httr"
+)
+for (package in required_packages) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+  }
+}
+
+
 library(tidyverse)
 library(rvest)
 library(httr)
@@ -33,6 +43,11 @@ for (gen_node in gen_nodes) {
         # Append to the list
         pokemon_data[[name]] <- img_url
     }
+}
+
+# Create images directory
+if (!dir.exists("files/pokemon_images")) {
+  dir.create("files/pokemon_images")
 }
     
 # Download images
