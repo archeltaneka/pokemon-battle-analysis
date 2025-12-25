@@ -1,3 +1,15 @@
+required_packages <- c(
+  "tidyverse", "dplyr", "ggplot2", "fmsb", 
+  "xgboost", "caret", "SHAPforxgboost",
+  "stats", "factoextra"
+)
+
+for (package in required_packages) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+  }
+}
+
 library(dplyr)
 library(stringi)
 library(tidyverse)
