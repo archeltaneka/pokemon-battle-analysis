@@ -293,20 +293,7 @@ pokemon-battle-analysis/
 
 ## 🤝 Contributing
 
-Contributions are welcome! Here's how you can help:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-### Development Guidelines
-
-* Follow R style guide conventions
-* Add comments for complex logic
-* Test changes locally before submitting PR
-* Update documentation as needed
+All kinds of contributions are welcome!
 
 ## 📄 License
 
@@ -314,14 +301,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-* **Data Source**: [Competitive Pokemon Dataset](https://www.kaggle.com/n2cholas/competitive-pokemon-dataset) by N2Cholas
+* **Data Source**: 
+  + [Competitive Pokemon Dataset](https://www.kaggle.com/n2cholas/competitive-pokemon-dataset) by N2Cholas
+  + [Pokemon Weedle's Cave - Kaggle](https://www.kaggle.com/datasets/terminus7/pokemon-challenge) by Terminus7
 * **Pokemon Company**: For creating this amazing franchise
 * **RStudio Team**: For the incredible Shiny framework
 * **Community**: Pokemon Showdown, Smogon, and the competitive Pokemon community
 * **Type Colors**: Based on official Pokemon type color scheme
 
 ---
-
-Made with ❤️ by [Your Name](https://github.com/your-username)
-
-**Star ⭐ this repository if you find it helpful!**
