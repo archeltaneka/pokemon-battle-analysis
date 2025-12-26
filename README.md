@@ -268,6 +268,16 @@ pokemon-battle-analysis/
 
 ## 📸 Screenshots
 
+### Main Interface
+<img width="2732" height="1545" alt="image" src="https://github.com/user-attachments/assets/fe43041d-2357-423f-986e-b2339a1e3a6f" />
+
+### Type Effectiveness View
+<img width="2739" height="1518" alt="image" src="https://github.com/user-attachments/assets/14cd2a81-7f28-48bd-af51-8543d3c0d3c3" />
+
+### Move Information
+<img width="240" height="240" alt="image" src="https://github.com/user-attachments/assets/aa2c6b0f-4ad4-465d-b811-dfe6abb2913a" />
+<img width="240" height="240" alt="image" src="https://github.com/user-attachments/assets/f4cd0a2f-8452-418e-bbbd-52008ff75832" />
+
 
 ## ⚠️ Limitations
 
